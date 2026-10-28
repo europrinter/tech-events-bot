@@ -88,16 +88,21 @@ def main():
         event_id = f"ctf_{event.get('id')}"
         if event_id not in seen_ids:
             new_ids.add(event_id)
+            title = event.get("title", "")
+            is_beginner = any(k in title.lower() for k in ["beginner", "junior", "student", "intro", "101"])
+            tag = "🌱 [Débutant] " if is_beginner else ""
+
             embed = {
-                "title": f"🚩 CTF : {event.get('title')}",
+                "title": f"🚩 CTF : {tag}{title}",
                 "url": event.get("url") or event.get("ctftime_url"),
+                "description": "🤝 *Réagissez pour former une équipe avec d'autres étudiants !*",
                 "color": 0xE74C3C,
                 "fields": [
                     {"name": "Début", "value": str(event.get("start", "N/A"))[:16].replace("T", " "), "inline": True},
                     {"name": "Fin", "value": str(event.get("finish", "N/A"))[:16].replace("T", " "), "inline": True},
                     {"name": "Format", "value": "En ligne" if not is_onsite else f"Présentiel ({event.get('location')})", "inline": True},
                 ],
-                "footer": {"text": "Source : CTFtime"}
+                "footer": {"text": "CTFtime • Accessible aux étudiants"}
             }
             send_to_all_webhooks(embed)
 
@@ -107,15 +112,16 @@ def main():
         if event_id not in seen_ids:
             new_ids.add(event_id)
             embed = {
-                "title": f"💻 Devpost : {h.get('title')}",
+                "title": f"💻 Hackathon : {h.get('title')}",
                 "url": h.get("url"),
-                "description": (h.get("displayed_location", {}).get("location") or "En ligne"),
+                "description": "💡 *Projet en ligne • Idéal pour étoffer son portfolio GitHub.*",
                 "color": 0x2ECC71,
                 "fields": [
-                    {"name": "Prix", "value": h.get("prize_amount", "Non spécifié"), "inline": True},
-                    {"name": "Thèmes", "value": ", ".join([t.get("name") for t in h.get("themes", [])][:3]) or "Général", "inline": True},
+                    {"name": "💰 Cashprize / Prix", "value": h.get("prize_amount", "Non spécifié"), "inline": True},
+                    {"name": "🏷️ Thèmes", "value": ", ".join([t.get("name") for t in h.get("themes", [])][:3]) or "Général", "inline": True},
+                    {"name": "🤝 Recherche équipe", "value": "Discutez-en dans ce salon", "inline": False},
                 ],
-                "footer": {"text": "Source : Devpost"}
+                "footer": {"text": "Devpost • Participation en ligne gratuite"}
             }
             send_to_all_webhooks(embed)
 
@@ -125,14 +131,16 @@ def main():
         if event_id not in seen_ids:
             new_ids.add(event_id)
             embed = {
-                "title": f"🏆 Agorize : {a.get('title') or a.get('name')}",
+                "title": f"🎓 Challenge Étudiant : {a.get('title') or a.get('name')}",
                 "url": a.get("url") or f"https://www.agorize.com/challenges/{a.get('slug', '')}",
+                "description": "💼 *Stages, prix et rencontres avec des recruteurs à la clé.*",
                 "color": 0x3498DB,
                 "fields": [
-                    {"name": "Organisateur", "value": a.get("company_name", "Entreprise partenaire"), "inline": True},
-                    {"name": "Type", "value": "Challenge Étudiant / Innovation", "inline": True},
+                    {"name": "🏢 Organisateur", "value": a.get("company_name", "Entreprise partenaire"), "inline": True},
+                    {"name": "🎯 Profil", "value": "Étudiants / Universités", "inline": True},
+                    {"name": "🤝 Recherche équipe", "value": "Discutez-en dans ce salon", "inline": False},
                 ],
-                "footer": {"text": "Source : Agorize (France)"}
+                "footer": {"text": "Agorize France • Opportunités étudiantes"}
             }
             send_to_all_webhooks(embed)
 
