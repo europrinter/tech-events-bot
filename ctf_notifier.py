@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import json
 import os
+import re
 import requests
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
@@ -24,7 +25,15 @@ def save_seen_ids(seen_ids):
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump(list(seen_ids), f, indent=2)
 
-def get_ctfs(limit=10):
+def is_usable_language(text):
+    if not text:
+        return True
+    # Rejette les alphabets non latins : cyrillique (russe) et idéogrammes asiatiques (CJK)
+    has_cyrillic = bool(re.search(r'[\u0400-\u04FF]', text))
+    has_cjk = bool(re.search(r'[\u4e00-\u9fff]', text))
+    return not (has_cyrillic or has_cjk)
+
+def get_ctfs(limit=12):
     now = int(datetime.now(timezone.utc).timestamp())
     url = f"https://ctftime.org/api/v1/events/?limit={limit}&start={now}"
     try:
@@ -46,18 +55,6 @@ def get_hackathons_devpost(limit=5):
         print(f"Erreur API Devpost : {e}")
         return []
 
-def get_hackathons_agorize(limit=5):
-    url = "https://admin.agorize.com/api/v2/challenges?status=open&locale=fr"
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        res.raise_for_status()
-        data = res.json()
-        challenges = data.get("challenges") or data.get("items") or []
-        return challenges[:limit]
-    except Exception as e:
-        print(f"Erreur API Agorize : {e}")
-        return []
-
 def send_to_all_webhooks(embed):
     if not DISCORD_WEBHOOK_URL:
         print("Aucun webhook Discord configuré.")
@@ -77,18 +74,29 @@ def main():
     seen_ids = load_seen_ids()
     new_ids = set()
 
-    # 1. CTFtime (Filtre : en ligne OU présentiel en France)
-    for event in get_ctfs(limit=10):
+    # 1. CTFtime
+    for event in get_ctfs(limit=12):
         is_onsite = event.get("onsite", False)
         location = (event.get("location") or "").lower()
+        title = event.get("title", "")
+        description = event.get("description", "")
 
+        # Filtre 1 : pas de présentiel hors France
         if is_onsite and ("france" not in location):
+            continue
+
+        # Filtre 2 : pays explicitement non adaptés
+        banned_locations = ["russia", "belarus", "ru", "china"]
+        if any(b in location for b in banned_locations):
+            continue
+
+        # Filtre 3 : rejet des caractères cyrilliques/asiatiques
+        if not is_usable_language(title) or not is_usable_language(description[:150]):
             continue
 
         event_id = f"ctf_{event.get('id')}"
         if event_id not in seen_ids:
             new_ids.add(event_id)
-            title = event.get("title", "")
             is_beginner = any(k in title.lower() for k in ["beginner", "junior", "student", "intro", "101"])
             tag = "🌱 [Débutant] " if is_beginner else ""
 
@@ -122,25 +130,6 @@ def main():
                     {"name": "🤝 Recherche équipe", "value": "Discutez-en dans ce salon", "inline": False},
                 ],
                 "footer": {"text": "Devpost • Participation en ligne gratuite"}
-            }
-            send_to_all_webhooks(embed)
-
-    # 3. Agorize (Challenges étudiants / France)
-    for a in get_hackathons_agorize(limit=5):
-        event_id = f"ago_{a.get('id') or a.get('slug')}"
-        if event_id not in seen_ids:
-            new_ids.add(event_id)
-            embed = {
-                "title": f"🎓 Challenge Étudiant : {a.get('title') or a.get('name')}",
-                "url": a.get("url") or f"https://www.agorize.com/challenges/{a.get('slug', '')}",
-                "description": "💼 *Stages, prix et rencontres avec des recruteurs à la clé.*",
-                "color": 0x3498DB,
-                "fields": [
-                    {"name": "🏢 Organisateur", "value": a.get("company_name", "Entreprise partenaire"), "inline": True},
-                    {"name": "🎯 Profil", "value": "Étudiants / Universités", "inline": True},
-                    {"name": "🤝 Recherche équipe", "value": "Discutez-en dans ce salon", "inline": False},
-                ],
-                "footer": {"text": "Agorize France • Opportunités étudiantes"}
             }
             send_to_all_webhooks(embed)
 
