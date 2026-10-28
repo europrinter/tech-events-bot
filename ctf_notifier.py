@@ -45,80 +45,68 @@ def get_hackathons(limit=5):
         print(f"Erreur API Devpost : {e}")
         return []
 
-def build_ctf_embed(event):
-    start_raw = event.get("start", "")
-    start_fmt = "Date non précisée"
-    if start_raw:
-        dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
-        start_fmt = dt.strftime("%d/%m/%Y à %H:%M UTC")
+def send_to_all_webhooks(embed):
+    if not DISCORD_WEBHOOK_URL:
+        print("Aucun webhook Discord configuré.")
+        return
 
-    return {
-        "title": f"🚩 CTF : {event.get('title', 'Sans titre')}",
-        "url": event.get("ctftime_url", "https://ctftime.org"),
-        "color": 0x3498DB,  # Bleu
-        "fields": [
-            {"name": "Format", "value": event.get("format", "N/A"), "inline": True},
-            {"name": "Type", "value": "En ligne" if event.get("onsite") is False else "Présentiel", "inline": True},
-            {"name": "Début", "value": start_fmt, "inline": False},
-            {"name": "Lien officiel", "value": f"[Accéder au site]({event.get('url')})" if event.get("url") else "Non renseigné", "inline": False}
-        ],
-        "footer": {"text": f"Source : CTFtime • Poids : {event.get('weight', 0)}"}
-    }
+    # Sépare les URLs si plusieurs sont renseignées avec des virgules
+    urls = [u.strip() for u in DISCORD_WEBHOOK_URL.split(",") if u.strip()]
 
-def build_hackathon_embed(event):
-    prize = event.get("prize_amount", "Non précisé")
-    dates = event.get("submission_period_dates", "Dates non précisées")
-    url = event.get("url", "https://devpost.com")
-
-    return {
-        "title": f"🏆 Hackathon : {event.get('title', 'Sans titre')}",
-        "url": url,
-        "color": 0x9B59B6,  # Violet
-        "fields": [
-            {"name": "Période", "value": dates, "inline": False},
-            {"name": "Prix / Cashprize", "value": prize, "inline": True},
-            {"name": "Lien d'inscription", "value": f"[Participer sur Devpost]({url})", "inline": False}
-        ],
-        "footer": {"text": "Source : Devpost"}
-    }
+    for url in urls:
+        try:
+            res = requests.post(url, json={"embeds": [embed]}, timeout=10)
+            if res.status_code not in (200, 204):
+                print(f"Erreur d'envoi vers {url[:35]}... : code {res.status_code}")
+        except requests.RequestException as e:
+            print(f"Exception lors de l'envoi vers {url[:35]}... : {e}")
 
 def main():
     seen_ids = load_seen_ids()
-    embeds = []
     new_ids = set()
 
-    # 1. Traitement des CTF
-    for ctf in get_ctfs(limit=5):
-        ctf_id = f"ctf_{ctf.get('id')}"
-        if ctf_id not in seen_ids:
-            embeds.append(build_ctf_embed(ctf))
-            new_ids.add(ctf_id)
+    # 1. Traitement des CTFs
+    for event in get_ctfs(limit=5):
+        event_id = f"ctf_{event.get('id')}"
+        if event_id not in seen_ids:
+            new_ids.add(event_id)
+            embed = {
+                "title": f"🚩 CTF : {event.get('title')}",
+                "url": event.get("url") or event.get("ctftime_url"),
+                "color": 0xE74C3C,  # Rouge
+                "fields": [
+                    {"name": "Début", "value": str(event.get("start", "N/A"))[:16].replace("T", " "), "inline": True},
+                    {"name": "Fin", "value": str(event.get("finish", "N/A"))[:16].replace("T", " "), "inline": True},
+                    {"name": "Format", "value": event.get("format", "En ligne"), "inline": True},
+                ],
+                "footer": {"text": "Source : CTFtime"}
+            }
+            send_to_all_webhooks(embed)
 
     # 2. Traitement des Hackathons
     for h in get_hackathons(limit=5):
-        h_id = f"hackathon_{h.get('id')}"
-        if h_id not in seen_ids:
-            embeds.append(build_hackathon_embed(h))
-            new_ids.add(h_id)
+        event_id = f"hack_{h.get('id')}"
+        if event_id not in seen_ids:
+            new_ids.add(event_id)
+            embed = {
+                "title": f"💻 Hackathon : {h.get('title')}",
+                "url": h.get("url"),
+                "description": (h.get("displayed_location", {}).get("location") or "En ligne"),
+                "color": 0x2ECC71,  # Vert
+                "fields": [
+                    {"name": "Prix", "value": h.get("prize_amount", "Non spécifié"), "inline": True},
+                    {"name": "Thèmes", "value": ", ".join([t.get("name") for t in h.get("themes", [])][:3]) or "Général", "inline": True},
+                ],
+                "footer": {"text": "Source : Devpost"}
+            }
+            send_to_all_webhooks(embed)
 
-    if not embeds:
-        print("Aucun nouvel événement à notifier.")
-        return
-
-    # Discord limite à 10 embeds par message
-    payload = {
-        "content": f"⚡ **{len(embeds)} nouvel(aux) événement(s) tech détecté(s) :**",
-        "embeds": embeds[:10]
-    }
-
-    try:
-        res = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
-        res.raise_for_status()
+    if new_ids:
         seen_ids.update(new_ids)
         save_seen_ids(seen_ids)
-        print(f"{len(embeds)} alertes envoyées avec succès.")
-    except Exception as e:
-        print(f"Erreur d'envoi Discord : {e}")
+        print(f"{len(new_ids)} nouvel(aux) événement(s) notifié(s).")
+    else:
+        print("Aucun nouvel événement à notifier.")
 
 if __name__ == "__main__":
     main()
