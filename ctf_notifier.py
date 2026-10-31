@@ -33,6 +33,65 @@ def is_usable_language(text):
     has_cjk = bool(re.search(r'[\u4e00-\u9fff]', text))
     return not (has_cyrillic or has_cjk)
 
+def parse_webhooks():
+    """
+    Parse les webhooks depuis la variable d'environnement.
+    Format attendu : "URL|REGION,URL|REGION" ou simple "URL,URL"
+    Régions supportées : FR, MA, ALL (ALL par défaut si non spécifié)
+    """
+    if not DISCORD_WEBHOOK_URL:
+        return []
+
+    targets = []
+    for entry in DISCORD_WEBHOOK_URL.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "|" in entry:
+            url, region = entry.split("|", 1)
+            targets.append((url.strip(), region.strip().upper()))
+        else:
+            targets.append((entry, "ALL"))
+    return targets
+
+def should_send_to_region(is_online, location, target_region):
+    """
+    Vérifie si un événement correspond au serveur cible :
+    - Événement en ligne : envoyé à tout le monde
+    - Cible 'ALL' : reçoit tout
+    - Sinon : correspondance géographique (FR ou MA)
+    """
+    if target_region == "ALL" or is_online:
+        return True
+
+    loc = (location or "").lower()
+    if target_region == "FR" and ("france" in loc or "fr" in loc):
+        return True
+    if target_region == "MA" and ("morocco" in loc or "maroc" in loc or "ma" in loc):
+        return True
+
+    return False
+
+def dispatch_discord(embed, is_online, location=""):
+    """
+    Distribue l'embed uniquement aux webhooks éligibles.
+    """
+    targets = parse_webhooks()
+    if not targets:
+        print("Aucun webhook Discord configuré.")
+        return
+
+    for url, region in targets:
+        if should_send_to_region(is_online, location, region):
+            try:
+                res = requests.post(url, json={"embeds": [embed]}, timeout=10)
+                if res.status_code not in (200, 204):
+                    print(f"Erreur d'envoi vers {region} ({url[:35]}...) : code {res.status_code}")
+                else:
+                    print(f"[OK] Envoyé vers Discord ({region})")
+            except requests.RequestException as e:
+                print(f"Exception lors de l'envoi vers {region} : {e}")
+
 def get_ctfs(limit=12):
     now = int(datetime.now(timezone.utc).timestamp())
     url = f"https://ctftime.org/api/v1/events/?limit={limit}&start={now}"
@@ -55,21 +114,6 @@ def get_hackathons_devpost(limit=5):
         print(f"Erreur API Devpost : {e}")
         return []
 
-def send_to_all_webhooks(embed):
-    if not DISCORD_WEBHOOK_URL:
-        print("Aucun webhook Discord configuré.")
-        return
-
-    urls = [u.strip() for u in DISCORD_WEBHOOK_URL.split(",") if u.strip()]
-
-    for url in urls:
-        try:
-            res = requests.post(url, json={"embeds": [embed]}, timeout=10)
-            if res.status_code not in (200, 204):
-                print(f"Erreur d'envoi vers {url[:35]}... : code {res.status_code}")
-        except requests.RequestException as e:
-            print(f"Exception lors de l'envoi vers {url[:35]}... : {e}")
-
 def main():
     seen_ids = load_seen_ids()
     new_ids = set()
@@ -77,17 +121,18 @@ def main():
     # 1. CTFtime
     for event in get_ctfs(limit=12):
         is_onsite = event.get("onsite", False)
+        is_online = not is_onsite
         location = (event.get("location") or "").lower()
         title = event.get("title", "")
         description = event.get("description", "")
 
-        # Filtre 1 : pas de présentiel hors France
-        if is_onsite and ("france" not in location):
-            continue
-
-        # Filtre 2 : pays explicitement non adaptés
+        # Filtre 1 : pays explicitement non adaptés / indésirables
         banned_locations = ["russia", "belarus", "ru", "china"]
         if any(b in location for b in banned_locations):
+            continue
+
+        # Filtre 2 : si c'est du présentiel, on ne garde que France ou Maroc
+        if is_onsite and not ("france" in location or "morocco" in location or "maroc" in location):
             continue
 
         # Filtre 3 : rejet des caractères cyrilliques/asiatiques
@@ -108,11 +153,11 @@ def main():
                 "fields": [
                     {"name": "Début", "value": str(event.get("start", "N/A"))[:16].replace("T", " "), "inline": True},
                     {"name": "Fin", "value": str(event.get("finish", "N/A"))[:16].replace("T", " "), "inline": True},
-                    {"name": "Format", "value": "En ligne" if not is_onsite else f"Présentiel ({event.get('location')})", "inline": True},
+                    {"name": "Format", "value": "En ligne" if is_online else f"Présentiel ({event.get('location')})", "inline": True},
                 ],
                 "footer": {"text": "CTFtime • Accessible aux étudiants"}
             }
-            send_to_all_webhooks(embed)
+            dispatch_discord(embed, is_online=is_online, location=location)
 
     # 2. Devpost (100 % en ligne)
     for h in get_hackathons_devpost(limit=5):
@@ -131,7 +176,8 @@ def main():
                 ],
                 "footer": {"text": "Devpost • Participation en ligne gratuite"}
             }
-            send_to_all_webhooks(embed)
+            # Devpost API ne remonte que du online
+            dispatch_discord(embed, is_online=True, location="")
 
     if new_ids:
         seen_ids.update(new_ids)
